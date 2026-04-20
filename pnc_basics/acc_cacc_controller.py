@@ -216,19 +216,20 @@ def plot_results(acc_result, cacc_result):
     plt.show()
 
 def main():
+
     acc = ACCController(
-        kp = 0.35,
-        kv = 0.8,
-        d0 = 8.0,
+        kp=0.35,
+        kv=1.0,
+        d0=8.0,
         h=1.2,
     )
 
     cacc = CACCController(
-        kp=0.30,
-        kv=0.8,
-        ka=0.9,
+        kp=0.35,
+        kv=1.0,
+        ka=0.8,
         d0=8.0,
-        h=1.2,       
+        h=1.2,
     )
 
     acc_result = simulate(acc, controller_type="ACC")
