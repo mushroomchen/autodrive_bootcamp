@@ -1,3 +1,6 @@
+import matplotlib
+matplotlib.use("Agg")
+
 import carla
 import math
 import time
@@ -59,42 +62,61 @@ def compute_path_yaw(cx, cy):
     yaw.append(yaw[-1])
     return np.array(yaw)    
 
-def calc_target_index(x, y, route_x, route_y, lookahead_distance):
+def normalize_angle(angle):
     """
-    Find the target point index on the route for the pure pursuit.
+    Normalize angle to [-pi, pi]
     """
-    dx = route_x -x
-    dy = route_y -y
-    distances = np.hypot(dx,dy)
+    while angle > math.pi:
+        angle -= 2.0*math.pi
+    while angle < -math.pi:
+        angle += 2.0*math.pi
+    return angle
 
+def calc_nearest_index_xy(x, y, cx, cy):
+    """
+    Find nearest path point index to vehicle rear axle.
+    """
+    dx = cx - x
+    dy = cy - y
+    distances = np.hypot(dx, dy)
     nearest_index = int(np.argmin(distances))
-    
-    target_index = nearest_index
-    while target_index < len(route_x) - 1 and distances[target_index] < lookahead_distance:
-        target_index += 1
-    
-    return target_index
+    return nearest_index
 
-def pure_pursuit_control(x, y, yaw, route_x, route_y, wheelbase, lookahead_distance):
+def calc_signed_cross_track_error_xy(x,y,yaw,v, cx, cy, cyaw, nearest_index):
     """
-    Compute desired steering angle delta (in radians) using pure pursuit.
+    Compute signed cross-track error.
+
+    Positive/negative sign is determined relative to path normal direction.
+    """    
+    dx = x - cx[nearest_index]
+    dy = y - cy[nearest_index]
+
+    # Path normal vector
+    path_yaw = cyaw[nearest_index]
+    normal_x = math.sin(path_yaw)
+    normal_y = -math.cos(path_yaw)
+
+    e = dx*normal_x + dy*normal_y
+    
+    return e
+
+def stanley_control(x,y,yaw,v, cx, cy, cyaw, k, eps=1e-3):
     """
-    target_index = calc_target_index(x, y, route_x, route_y, lookahead_distance)
+    Compute steering angle using Stanley controller.
+    """
+    nearest_index = calc_nearest_index_xy(x,y, cx, cy)
 
-    tx = route_x[target_index]
-    ty = route_y[target_index]
+    # Heading error
+    theta_e = normalize_angle(cyaw[nearest_index] - yaw)
 
-    alpha = math.atan2(ty - y, tx - x) - yaw
+    # Cross-track error
+    e_y = calc_signed_cross_track_error_xy(x, y, yaw, v, cx, cy, cyaw, nearest_index)
 
-    # Normalize alpha to [-pi, pi]
-    while alpha > math.pi:
-        alpha -= 2.0 * math.pi
-    while alpha < -math.pi:
-        alpha += 2.0 * math.pi
+    # Stanley control law
+    delta = theta_e + math.atan2(k * e_y, v + eps)
+    delta = normalize_angle(delta)
 
-    delta = math.atan2(2.0 * wheelbase * math.sin(alpha), lookahead_distance)
-
-    return delta, target_index, tx, ty
+    return delta, nearest_index, e_y
 
 def speed_control(target_speed, current_speed, kp=0.25):
     """
@@ -171,9 +193,11 @@ def main():
     route_x, route_y = build_route(
         carla_map,
         vehicle_location,
-        step_distance=2.0,
-        num_points=150
+        step_distance=0.5,
+        num_points=300
     )
+
+    cyaw = compute_path_yaw(route_x, route_y)
 
     # Draw route in CARLA world for visualization
     for i in range(len(route_x)):
@@ -188,13 +212,13 @@ def main():
     # 5. Control parameters
     # ------------------------------------------------------------------
     wheelbase = 2.8
-    lookahead_distance = 5.0
-    target_speed = 8.0  # m/s
+    target_speed = 5.0  # m/s
 
     spectator = world.get_spectator()
 
     x_hist = []
     y_hist = []
+    e_hist = []
     target_x_hist = []
     target_y_hist = []
 
@@ -214,21 +238,26 @@ def main():
 
             x = location.x
             y = location.y
+            
+            front_x = x + (wheelbase / 2.0) * math.cos(yaw)
+            front_y = y + (wheelbase / 2.0) * math.sin(yaw)
 
             # ----------------------------------------------------------
             # Pure pursuit lateral control
             # ----------------------------------------------------------
-            delta, target_index, tx, ty = pure_pursuit_control(
-                x=x,
-                y=y,
+            delta, nearest_index, e_y = stanley_control(
+                x=front_x,
+                y=front_y,
                 yaw=yaw,
-                route_x=route_x,
-                route_y=route_y,
-                wheelbase=wheelbase,
-                lookahead_distance=lookahead_distance
+                v=speed,
+                cx=route_x,
+                cy=route_y,
+                cyaw=cyaw,
+                k=1.5
             )
 
             # Convert steering angle (rad) to CARLA normalized steer [-1, 1]
+            #delta = np.clip(delta, -0.4, 0.4)
             steer_cmd = np.clip(delta / max_steer_rad, -1.0, 1.0)
 
             # ----------------------------------------------------------
@@ -256,8 +285,9 @@ def main():
             # Save history
             x_hist.append(x)
             y_hist.append(y)
-            target_x_hist.append(tx)
-            target_y_hist.append(ty)
+            e_hist.append(e_y)
+            # target_x_hist.append(tx)
+            # target_y_hist.append(ty)
 
             time.sleep(dt)
 
