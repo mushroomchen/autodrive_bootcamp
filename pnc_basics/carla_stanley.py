@@ -194,7 +194,7 @@ def main():
         carla_map,
         vehicle_location,
         step_distance=0.5,
-        num_points=300
+        num_points=600
     )
 
     cyaw = compute_path_yaw(route_x, route_y)
@@ -222,7 +222,7 @@ def main():
     target_x_hist = []
     target_y_hist = []
 
-    duration = 25.0
+    duration = 35.0
     dt = 0.05
     steps = int(duration / dt)
      
